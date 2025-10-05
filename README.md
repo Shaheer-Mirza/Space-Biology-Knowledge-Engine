@@ -1,1 +1,308 @@
 # Space-Biology-Knowledge-Engine
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NASA Bioscience Explorer Dashboard</title>
+    <!-- Load Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom scrollbar styling for a cleaner look */
+        #chatHistory::-webkit-scrollbar {
+            width: 8px;
+        }
+        #chatHistory::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1; /* slate-300 */
+            border-radius: 4px;
+        }
+        #chatHistory::-webkit-scrollbar-track {
+            background: #f1f5f9; /* slate-100 */
+        }
+        body {
+            background-color: #f1f5f9; /* Light slate background */
+        }
+        .user-message {
+            background-color: #3b82f6; /* Blue-500 */
+            color: white;
+            border-radius: 1.25rem 1.25rem 0.25rem 1.25rem; /* Rounded corners for user bubble */
+        }
+        .ai-message {
+            background-color: #ffffff;
+            color: #1f2937; /* Gray-800 */
+            border-radius: 0.25rem 1.25rem 1.25rem 1.25rem; /* Rounded corners for AI bubble */
+        }
+        .ai-source-box a {
+            word-break: break-all; /* Ensure long URLs wrap */
+        }
+    </style>
+</head>
+<body class="font-sans min-h-screen flex flex-col antialiased">
+
+    <!-- Main Container -->
+    <div class="flex-1 flex flex-col max-w-4xl w-full mx-auto p-4 sm:p-6">
+        
+        <!-- Header -->
+        <header class="text-center pb-4 pt-2">
+            <h1 class="text-3xl font-extrabold text-gray-800">
+                <span class="text-green-600">NASA Bioscience</span> Explorer
+            </h1>
+            <p class="text-sm text-gray-500 mt-1">AI-powered summarization of space biology experiments for Moon and Mars exploration.</p>
+        </header>
+
+        <!-- Chat History Area -->
+        <div id="chatHistory" class="flex-1 bg-white shadow-xl rounded-xl p-4 sm:p-6 overflow-y-auto mb-4 border border-gray-200">
+            <!-- Initial AI Welcome Message -->
+            <div class="flex justify-start mb-4">
+                <div class="ai-message p-3 max-w-xs sm:max-w-md shadow">
+                    <p class="text-sm">Welcome to the Bioscience Explorer. I am a specialized research assistant. My knowledge is **strictly limited** to analyzing and summarizing experiment results from the NCBI PMC publications. How can I help you explore the impacts of space biology experiments relevant to future missions to the Moon and Mars?</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Input Form -->
+        <form id="chatForm" class="flex items-center space-x-3 p-3 bg-white rounded-xl shadow-lg border border-gray-200">
+            <input
+                type="text"
+                id="chatInput"
+                placeholder="e.g., Summarize the impacts of microgravity on plant growth..."
+                class="flex-1 p-3 border-2 border-gray-200 focus:ring-green-500 focus:border-green-500 rounded-lg transition duration-150 ease-in-out"
+                autocomplete="off"
+                required
+            />
+            <button
+                type="submit"
+                id="sendButton"
+                class="bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-150 ease-in-out shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+                Analyze
+            </button>
+        </form>
+
+        <!-- Loading Indicator/Status Message -->
+        <div id="statusMessage" class="mt-3 text-center text-sm text-gray-600 hidden">
+            <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-green-500 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Analyzing NASA publications...
+        </div>
+    </div>
+
+    <script>
+        // --- Gemini API Setup ---
+        // WARNING: The API key is now hardcoded as requested. For real applications, use environment variables or a secure backend.
+        const apiKey = "AIzaSyA7H8B_6KmV65bF4do1gc-PREpZptbyqaU"; 
+        const API_MODEL = "gemini-2.5-flash-preview-05-20";
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=${apiKey}`;
+
+        // URL Constraint - The AI is instructed to ONLY use this NCBI page and the links within it.
+        const userSourceURL = "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC/";
+
+        // --- DOM Elements ---
+        const chatForm = document.getElementById('chatForm');
+        const chatInput = document.getElementById('chatInput');
+        const chatHistory = document.getElementById('chatHistory');
+        const sendButton = document.getElementById('sendButton');
+        const statusMessage = document.getElementById('statusMessage');
+        
+        // --- State Management (Simple Chat History) ---
+        let conversationHistory = [];
+
+        // Utility to escape HTML for safety
+        function escapeHtml(unsafe) {
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;"); 
+        }
+
+        // Renders a message to the chat history. Accepts HTML content.
+        function addMessage(htmlContent, sender) {
+            const messageElement = document.createElement('div');
+            messageElement.className = `flex mb-4 ${sender === 'user' ? 'justify-end' : 'justify-start'}`;
+            
+            // Format text to replace newlines with <br> tags
+            const formattedContent = htmlContent.replace(/\n/g, '<br>');
+
+            messageElement.innerHTML = `
+                <div class="${sender}-message p-3 max-w-xs sm:max-w-xl shadow ai-source-box">
+                    <p class="text-sm">${formattedContent}</p>
+                </div>
+            `;
+            chatHistory.appendChild(messageElement);
+            chatHistory.scrollTop = chatHistory.scrollHeight; // Auto-scroll to bottom
+        }
+
+        // Handles API calls with exponential backoff for retry
+        async function fetchWithRetry(url, options, maxRetries = 5) {
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.status === 429 && i < maxRetries - 1) {
+                        const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                        console.warn(`Rate limit hit (429). Retrying in ${delay / 1000}s...`);
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        continue;
+                    }
+                    if (!response.ok) {
+                        const errorBody = await response.json().catch(() => ({}));
+                        throw new Error(`API Request failed with status ${response.status}: ${errorBody.error?.message || 'Unknown error'}`);
+                    }
+                    return response;
+                } catch (error) {
+                    if (i === maxRetries - 1) {
+                        throw error;
+                    }
+                    // For network errors or non-429 client errors, still apply backoff before retry
+                    const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                    console.error(`Attempt ${i + 1} failed: ${error.message}. Retrying in ${delay / 1000}s...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+            throw new Error("Maximum retry attempts reached.");
+        }
+
+
+        // Main function to send message and get AI response
+        async function sendMessage() {
+            const userQuery = chatInput.value.trim();
+            if (!userQuery) return;
+
+            // 1. Clear input and disable UI
+            chatInput.value = '';
+            sendButton.disabled = true;
+            statusMessage.classList.remove('hidden');
+
+            // 2. Display user message (escaped, with newlines converted to <br>)
+            addMessage(escapeHtml(userQuery).replace(/\n/g, '<br>'), 'user');
+
+            // 3. Add to history for context
+            conversationHistory.push({ role: "user", parts: [{ text: userQuery }] });
+
+            // Updated System Instruction: Focused on the new challenge (summarizing bioscience for space exploration)
+            const specificSourceInstruction = `You are a specialized NASA Bioscience Research Assistant, focused on human exploration of the Moon and Mars. Your role is to dynamically summarize and interpret the impacts and results of space biology experiments documented in publications found at the specified source: ${userSourceURL} and its articles. When a user asks a question, summarize the key findings, experimental impacts, or relevant data from the NCBI articles. You MUST strictly limit your responses to the information available in the NCBI source. If the information is not present, state that it cannot be found in the required knowledge base. Do not use any general knowledge or external information.`;
+
+            // 4. Construct API payload
+            const payload = {
+                // We send the entire conversation history for context (multi-turn chat)
+                contents: conversationHistory, 
+                // Enable Google Search for grounding so the model can search the specified URL
+                tools: [{ "google_search": {} }],
+                // Update system instruction to enforce the source constraint
+                systemInstruction: {
+                    parts: [{ text: specificSourceInstruction }]
+                }
+            };
+
+            let aiResponseText = "Sorry, I encountered an error while processing your request. Please try again.";
+            let citationSources = []; // Array to hold extracted sources
+            
+            try {
+                const response = await fetchWithRetry(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const result = await response.json();
+                const candidate = result.candidates?.[0];
+
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    aiResponseText = candidate.content.parts[0].text;
+                    
+                    // --- Extract Grounding Sources Programmatically ---
+                    const groundingMetadata = candidate.groundingMetadata;
+                    if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                        citationSources = groundingMetadata.groundingAttributions
+                            .map(attribution => ({
+                                uri: attribution.web?.uri,
+                                title: attribution.web?.title,
+                            }))
+                            .filter(source => source.uri); // Only keep sources with a URI
+                    }
+                    // --- END LOGIC ---
+
+                } else if (result.error) {
+                    aiResponseText = `API Error: ${result.error.message}`;
+                    console.error("Gemini API Error:", result.error);
+                } else {
+                    aiResponseText = "Received an unexpected response from the API.";
+                    console.error("Unexpected API response structure:", result);
+                }
+
+            } catch (error) {
+                console.error("Fetch or processing error:", error);
+                // Keep the default error message
+            }
+
+            // 5. Compile final response text and HTML sources
+            let finalResponse = aiResponseText;
+            let sourcesFoundOnDomain = false;
+
+            if (citationSources.length > 0) {
+                let sourceHtml = "<br><br><span class='font-bold text-xs block mt-1 border-t border-gray-200 pt-2 text-gray-700'>Sources Used:</span>";
+                
+                citationSources.forEach((source, index) => {
+                    // Filter: Only display the source if the URL contains the desired constraint URL
+                    if (source.uri && source.uri.includes("ncbi.nlm.nih.gov/pmc/articles/")) {
+                         // The source object contains plain text, so we don't escape it.
+                         sourceHtml += `<span class='text-xs block'>${index + 1}. <a href="${source.uri}" target="_blank" class="text-blue-600 hover:text-blue-800 hover:underline">${source.title || 'Referenced Article'}</a></span>`;
+                         sourcesFoundOnDomain = true;
+                    }
+                });
+                
+                // Append sources only if we found sources matching the filter
+                if (sourcesFoundOnDomain) {
+                    finalResponse += sourceHtml;
+                }
+            }
+
+            // 6. Display AI response (includes HTML sources)
+            addMessage(finalResponse, 'ai');
+
+            // 7. Add AI's pure text response to history for context
+            conversationHistory.push({ role: "model", parts: [{ text: aiResponseText }] });
+
+            // 8. Re-enable UI
+            sendButton.disabled = false;
+            statusMessage.classList.add('hidden');
+            chatInput.focus();
+        }
+
+        // --- Event Listener ---
+        chatForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            sendMessage();
+        });
+
+        // Initial focus
+        window.onload = () => {
+             chatInput.focus();
+        };
+
+        // --- Firebase/Environment Setup (Dummy inclusion for the Canvas context) ---
+        // Although this app does not use Firestore or Firebase Auth, these global vars 
+        // are typically required by the environment but are not strictly needed for the Gemini API call itself.
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        console.log(`App ID: ${appId}`);
+
+    </script>
+</body>
+</html>
